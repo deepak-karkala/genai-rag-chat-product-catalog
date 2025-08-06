@@ -1,0 +1,57 @@
+name: Deploy RAG Inference Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'inference_service/**'
+
+jobs:
+  # ... (lint-and-test job as before) ...
+  
+  build-and-push-image:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      # ... (checkout code) ...
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        # ...
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build, tag, and push image to Amazon ECR
+        run: |
+          docker build -t ${{ secrets.ECR_REPOSITORY_URI }}:${{ github.sha }} ./inference_service
+          docker push ${{ secrets.ECR_REPOSITORY_URI }}:${{ github.sha }}
+
+  deploy-to-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push-image
+    environment: staging
+    steps:
+      # ... (checkout code, configure AWS creds, setup Terraform) ...
+      - name: Terraform Apply Staging
+        run: |
+          cd inference_service/infra
+          terraform init
+          # Pass the new image tag to the deployment
+          terraform apply -auto-approve -var="env=staging" -var="image_tag=${{ github.sha }}"
+
+  run-staging-tests:
+    name: Run Integration & Load Tests
+    runs-on: ubuntu-latest
+    needs: deploy-to-staging
+    environment: staging
+    steps:
+      # ... (setup, install dependencies) ...
+      - name: Run integration tests
+        env:
+          STAGING_API_ENDPOINT: ${{ secrets.STAGING_API_ENDPOINT }}
+        run: pytest inference_service/tests/integration/
+      - name: Run load tests
+        run: locust -f inference_service/tests/load/locustfile.py --host ${{ secrets.STAGING_API_ENDPOINT }} --headless -u 10 -r 2 --run-time 1m
+
+  # ... (Manual approval gate and deploy-to-production jobs as planned) ...
