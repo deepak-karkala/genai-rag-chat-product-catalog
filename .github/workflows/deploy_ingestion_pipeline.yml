@@ -1,0 +1,62 @@
+name: Deploy Data Ingestion Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ingestion_pipeline/**'
+
+jobs:
+  lint-and-test:
+    name: Lint & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r ingestion_pipeline/requirements.txt
+      - name: Run unit tests
+        run: pytest ingestion_pipeline/tests/unit/
+
+  deploy-to-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.STAGING_AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+      - name: Terraform Apply
+        run: |
+          cd ingestion_pipeline/infra
+          terraform init
+          terraform apply -auto-approve -var="env=staging"
+
+  run-integration-test:
+    name: Run Integration Tests on Staging
+    runs-on: ubuntu-latest
+    needs: deploy-to-staging
+    environment: staging
+    steps:
+      # ... (similar setup to deploy job) ...
+      - name: Run integration tests
+        env:
+          STATE_MACHINE_ARN: ${{ secrets.STAGING_SFN_ARN }}
+          RAW_BUCKET: ${{ secrets.STAGING_RAW_BUCKET }}
+          OS_HOST: ${{ secrets.STAGING_OS_HOST }}
+        run: pytest ingestion_pipeline/tests/integration/

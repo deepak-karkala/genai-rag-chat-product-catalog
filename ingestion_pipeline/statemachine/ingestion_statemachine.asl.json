@@ -1,0 +1,51 @@
+{
+  "Comment": "RAG Data Ingestion Pipeline for a single product.",
+  "StartAt": "LoadProductData",
+  "States": {
+    "LoadProductData": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${LoadDataLambdaArn}",
+        "Payload.$": "$"
+      },
+      "Next": "ProcessAndChunkText",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "NotifyFailure"
+      }]
+    },
+    "ProcessAndChunkText": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "InputPath": "$.Payload",
+      "ResultPath": "$.ProcessedText",
+      "Next": "GenerateEmbeddings"
+    },
+    "GenerateEmbeddings": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "InputPath": "$.ProcessedText",
+      "ResultPath": "$.Embeddings",
+      "Next": "IndexInOpenSearch"
+    },
+    "IndexInOpenSearch": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "InputPath": "$.Embeddings",
+      "End": true
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SnsTopicArn}",
+        "Message": {
+          "Input.$": "$",
+          "Message": "RAG Ingestion Pipeline Failed!"
+        }
+      },
+      "End": true
+    }
+  }
+}
