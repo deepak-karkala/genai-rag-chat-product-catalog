@@ -54,4 +54,53 @@ jobs:
       - name: Run load tests
         run: locust -f inference_service/tests/load/locustfile.py --host ${{ secrets.STAGING_API_ENDPOINT }} --headless -u 10 -r 2 --run-time 1m
 
-  # ... (Manual approval gate and deploy-to-production jobs as planned) ...
+  deploy-to-production:
+    name: Canary Deploy to Production
+    runs-on: ubuntu-latest
+    needs: run-staging-tests
+    environment: production
+    # ... (permissions, secrets, etc.) ...
+    steps:
+      # ... (checkout, configure AWS creds, setup Terraform) ...
+      - name: 1. Deploy Challenger Service
+        run: |
+          cd inference_service/infra
+          terraform init
+          # Deploy the new container as the "challenger" service
+          terraform apply -auto-approve -var="env=production" -var="image_tag=${{ github.sha }}" -target=aws_ecs_service.challenger
+
+      - name: 2. Shift 5% Traffic to Challenger
+        run: |
+          cd inference_service/infra
+          # Update the ALB / API Gateway to send 5% of traffic
+          terraform apply -auto-approve -var="env=production" -var="challenger_weight=5"
+      
+      - name: 3. Monitor Canary Health
+        run: |
+          # This script would query CloudWatch for challenger's error rate and latency
+          # If metrics exceed thresholds, it exits with a non-zero code.
+          ./scripts/monitor_canary.sh challenger-service-name
+      
+      - name: 4. Manual Approval for Full Rollout
+        if: success()
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ github.TOKEN }}
+          approvers: 'engineering-lead,product-manager'
+          minimum-approvals: 1
+          issue-title: "Promote RAG Challenger to 100% Traffic?"
+      
+      - name: 5. Promote Challenger (if approved)
+        if: success()
+        run: |
+          cd inference_service/infra
+          # Shift 100% traffic to challenger and scale down control
+          terraform apply -auto-approve -var="env=production" -var="challenger_weight=100"
+
+      - name: 6. Automated Rollback (if canary monitor fails)
+        if: failure()
+        run: |
+          echo "Canary deployment failed! Rolling back..."
+          cd inference_service/infra
+          terraform apply -auto-approve -var="env=production" -var="challenger_weight=0"
+          # This step would also trigger a PagerDuty/Slack alert
