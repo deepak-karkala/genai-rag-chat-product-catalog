@@ -1,0 +1,35 @@
+name: Deploy Fine-tuning Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'finetuning_pipeline/**'
+      - 'dags/embedding_finetuning_dag.py'
+
+jobs:
+  lint-and-test:
+    name: Lint & Unit Test
+    runs-on: ubuntu-latest
+    steps:
+      # ... (checkout, setup python, install dependencies) ...
+      - name: Run unit tests
+        run: pytest finetuning_pipeline/tests/unit/
+
+  deploy-to-staging:
+    name: Deploy to Staging Airflow
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    environment: staging
+    steps:
+      # ... (checkout, configure AWS creds, setup Terraform) ...
+      - name: Terraform Apply
+        run: |
+          cd finetuning_pipeline/infra
+          terraform init
+          terraform apply -auto-approve -var="env=staging"
+      - name: Sync DAG to Staging Airflow
+        # This step would use aws s3 sync or a custom script to upload the
+        # dags/embedding_finetuning_dag.py file to the Airflow S3 bucket.
+        run: aws s3 sync ./dags s3://${{ secrets.STAGING_AIRFLOW_DAGS_BUCKET }}/dags
